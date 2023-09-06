@@ -1,86 +1,10 @@
-import math
-
 from lxml import etree
 from datetime import datetime, timedelta, time, timezone
 import json
 import requests
-import pytz
-import re
-import unicodedata
 import configparser
 import os
-
-bt_dt_format = '%Y-%m-%dT%H:%M:%SZ'
-tz = pytz.timezone('Europe/London')
-
-
-# From https://stackoverflow.com/questions/4324790/removing-control-characters-from-a-string-in-python
-def remove_control_characters(s):
-    return "".join(ch for ch in s if unicodedata.category(ch)[0]!="C")
-
-# From spatialtime/iso8601_duration.py
-def parse_duration(iso_duration):
-    """Parses an ISO 8601 duration string into a datetime.timedelta instance.
-    Args:
-        iso_duration: an ISO 8601 duration string.
-    Returns:
-        a datetime.timedelta instance
-    """
-    m = re.match(r'^P(?:(\d+)Y)?(?:(\d+)M)?(?:(\d+)D)?T(?:(\d+)H)?(?:(\d+)M)?(?:(\d+(?:.\d+)?)S)?$',
-                 iso_duration)
-    if m is None:
-        raise ValueError("invalid ISO 8601 duration string")
-
-    days = 0
-    hours = 0
-    minutes = 0
-    seconds = 0.0
-
-    # Years and months are not being utilized here, as there is not enough
-    # information provided to determine which year and which month.
-    # Python's time_delta class stores durations as days, seconds and
-    # microseconds internally, and therefore we'd have to
-    # convert parsed years and months to specific number of days.
-
-    if m[3]:
-        days = int(m[3])
-    if m[4]:
-        hours = int(m[4])
-    if m[5]:
-        minutes = int(m[5])
-    if m[6]:
-        seconds = float(m[6])
-
-    return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
-
-def get_days(src: str, days_to_grab: int = 2) -> list:
-    """
-Generate appropriate list of dates for the required API
-    :param src: The EPG source required
-    :param days_to_grab: Number of days of data to grab
-    :return: List of dates in required formats
-    """
-    dates = []
-
-    if src == "sky":
-        now = int(datetime.timestamp(datetime.now() - timedelta(hours=1)))
-        for idx in range(1, days_to_grab + 1):
-            dates.append(int(datetime.timestamp(datetime.combine(datetime.now(), time(0, 0)) + timedelta(idx))))
-
-    elif src == "bt":
-        now = datetime.now() - timedelta(hours=1)
-        for idx in range(1, days_to_grab + 1):
-            dates.append((datetime.combine(datetime.now(), time(0, 0)) + timedelta(idx)))
-
-    elif src == "freeview":
-        now = math.trunc(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-        for idx in range(1, days_to_grab + 1):
-            dates.append(math.trunc((datetime.now(timezone.utc).replace(hour=0, minute=0, second=0,
-                                                                        microsecond=0) + timedelta(idx)).timestamp()))
-
-    dates.insert(0, now)
-    return dates
-
+from utils import *
 
 def get_channels_data() -> list:
     """
@@ -144,7 +68,13 @@ Make the channels and programmes into something readable by XMLTV
 
     return etree.tostring(data, pretty_print=True, encoding='utf-8')
 
+
 def run(days_to_grab: int = 2, path_to_epg: str = os.path.join(f'{os.getcwd()}', 'epg.xml')):
+    """
+Run the application
+    :param days_to_grab: Number of days of data to grab
+    :param path_to_epg:  Full path (including filename/extension of where EPG should be saved
+    """
     # Load the channels data
     channels_data = get_channels_data()
 
@@ -290,10 +220,14 @@ def run(days_to_grab: int = 2, path_to_epg: str = os.path.join(f'{os.getcwd()}',
         f.write(channel_xml)
         f.close()
 
-def make_config_file(config_parser):
-    config['CONFIG'] = {'epg_dir': f'{os.getcwd()}',
+
+def make_config_file():
+    """
+Creates a .ini config file to store info for the app
+    """
+    config['CONFIG'] = {'epg_dir':      f'{os.getcwd()}',
                         'epg_filename': 'epg',
-                        'days': '2'}
+                        'days':         '2'}
     try:
         with open('config.ini', 'w') as configfile:
             config.write(configfile)
@@ -302,13 +236,17 @@ def make_config_file(config_parser):
 
 
 if __name__ == '__main__':
+    # Make a config parser
     config = configparser.ConfigParser()
 
-    if not os.path.isfile(os.getcwd() + 'config.ini'):
-        make_config_file(config)
+    # If .ini doesn't exist, make one
+    if not os.path.isfile(os.path.join(os.getcwd(), 'config.ini')):
+        make_config_file()
 
+    # Read the .ini file
     config.read('config.ini')
 
+    # Try to grab custom days, default to 2 if not found
     try:
         conf_days_to_grab = config['CONFIG']['days']
         days_to_int = int(conf_days_to_grab)
@@ -316,7 +254,7 @@ if __name__ == '__main__':
         print("Encountered issue with supplied days variable!")
         days_to_int = 2
 
+    # Set the path for the EPG to be saved in
     epg_path = os.path.join(config['CONFIG']['epg_dir'], config['CONFIG']['epg_filename'] + '.xml')
-
 
     run(days_to_grab=int(days_to_int), path_to_epg=epg_path)
