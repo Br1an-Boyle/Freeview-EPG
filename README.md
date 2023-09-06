@@ -1,3 +1,6 @@
+> **Warning**
+This branch is still in active development - please use with caution and report any errors as you encounter them.
+
 ![logo](https://user-images.githubusercontent.com/9065463/232618260-d9017259-1786-4d85-807f-63752143d403.png)
 ![GitHub Workflow Status](https://img.shields.io/github/actions/workflow/status/dp247/Freeview-EPG/actions.yml?color=%232ca9bc&label=EPG%20Generation&style=flat-square) ![GitHub issues](https://img.shields.io/github/issues-raw/dp247/Freeview-EPG?color=%232ca9bc&style=flat-square)
 
@@ -21,15 +24,15 @@ The project works by using various APIs to parse channel and programme data and 
 
 
 ## Usage
-Grab the XMLTV file from this link and paste it into your favorite IPTV client:
-```
-https://raw.githubusercontent.com/dp247/Freeview-EPG/master/epg.xml
-```
+The version in the application works a little differently and does not automatically build its own EPG. However, it does allow for customisation of how many days data should be pulled back, as well as where the EPG file should be saved.
+
+This branch needs a config.ini file to work properly - the app will create one in the project directory when it's first run. The options are as follows:
+- epg_dir = The folder that the EPG file should be saved in
+- epg_filename = The filename (minus the extension) that the EPG file should be called
+- days = A number between 1 and 7 of how many days (after today) data should be pulled back - e.g. 1 would pull back today and tomorrow.
 
 ## To-do
-- Add remaining local BBC radio stations
-- Add channel logos/icons
-- Create a standalone version with support for upto 7 days, as well as custom channel lists
+- Changes from main branch
 
 ## Contributing
 ### Guidelines
