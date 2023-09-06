@@ -7,6 +7,8 @@ import requests
 import pytz
 import re
 import unicodedata
+import configparser
+import os
 
 bt_dt_format = '%Y-%m-%dT%H:%M:%SZ'
 tz = pytz.timezone('Europe/London')
@@ -51,36 +53,33 @@ def parse_duration(iso_duration):
 
     return timedelta(days=days, hours=hours, minutes=minutes, seconds=seconds)
 
-def get_days(src: str) -> list:
+def get_days(src: str, days_to_grab: int = 2) -> list:
     """
-Generate epoch times for now, midnight tomorrow, and midnight the next day
-    :return: List of times, either in epoch (for Sky) or str (for BT)
+Generate appropriate list of dates for the required API
+    :param src: The EPG source required
+    :param days_to_grab: Number of days of data to grab
+    :return: List of dates in required formats
     """
+    dates = []
+
     if src == "sky":
         now = int(datetime.timestamp(datetime.now() - timedelta(hours=1)))
-        day_1 = int(datetime.timestamp(datetime.combine(datetime.now(), time(0, 0)) + timedelta(1)))
-        day_2 = int(datetime.timestamp(datetime.combine(datetime.now(), time(0, 0)) + timedelta(2)))
-        return [now, day_1, day_2]
+        for idx in range(1, days_to_grab + 1):
+            dates.append(int(datetime.timestamp(datetime.combine(datetime.now(), time(0, 0)) + timedelta(idx))))
 
     elif src == "bt":
         now = datetime.now() - timedelta(hours=1)
-        day_1 = (datetime.combine(datetime.now(), time(0, 0)) + timedelta(1))
-        day_2 = (datetime.combine(datetime.now(), time(0, 0)) + timedelta(2))
-        return [now, day_1, day_2]
+        for idx in range(1, days_to_grab + 1):
+            dates.append((datetime.combine(datetime.now(), time(0, 0)) + timedelta(idx)))
 
     elif src == "freeview":
-        midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp()
-
         now = math.trunc(datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0).timestamp())
-        day_1 = math.trunc((datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(1)).timestamp())
-        day_2 = math.trunc((datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0) + timedelta(2)).timestamp())
-        return [now, day_1, day_2]
+        for idx in range(1, days_to_grab + 1):
+            dates.append(math.trunc((datetime.now(timezone.utc).replace(hour=0, minute=0, second=0,
+                                                                        microsecond=0) + timedelta(idx)).timestamp()))
 
-    else:
-        now = (datetime.combine(datetime.now(), time(0, 0)))
-        day_1 = (datetime.combine(datetime.now(), time(0, 0)) + timedelta(1))
-        day_2 = (datetime.combine(datetime.now(), time(0, 0)) + timedelta(2))
-        return [now, day_1, day_2]
+    dates.insert(0, now)
+    return dates
 
 
 def get_channels_data() -> list:
@@ -145,122 +144,38 @@ Make the channels and programmes into something readable by XMLTV
 
     return etree.tostring(data, pretty_print=True, encoding='utf-8')
 
+def run(days_to_grab: int = 2, path_to_epg: str = os.path.join(f'{os.getcwd()}', 'epg.xml')):
+    # Load the channels data
+    channels_data = get_channels_data()
 
-# Load the channels data
-channels_data = get_channels_data()
+    # If days to grab is more than 7, reset (some EPGs only return 7 days of data)
+    if days_to_grab < 1:
+        raise ValueError("Cannot grab <1 day of data")
+    if days_to_grab > 7:
+        print("Resetting days to grab to 7: some EPGs do not support more than 7 days!")
+        days_to_grab = 7
 
-programme_data = []
-for channel in channels_data:
-    print(channel[2][1])
-    # If EPG is to be sourced from Sky:
-    if channel[0][1] == "sky":
-        # Get some epoch times - right now, 12am tomorrow and 12am the day after tomorrow (so 48h)
-        epoch_times = get_days(channel[0][1])
-        for epoch in epoch_times:
-            url = f"https://epgservices.sky.com/5.2.2/api/2.0/channel/json/{channel[3][1]}/{epoch}/86400/4"
-            req = requests.get(url)
-            if req.status_code != 200:
-                continue
-            result = json.loads(req.text)
-            epg_data = result['listings'][f'{channel[3][1]}']
-            for item in epg_data:
-                title = item['t']
-                desc = item['d'] if 'd' in item else None
-                start = int(item['s'])
-                end = int(item['s']) + int(item['m'][1])
-                icon = f"http://epgstatic.sky.com/epgdata/1.0/paimage/46/1/{item['img']}" if 'img' in item else None
-                ch_name = channel[2][1]
-
-                programme_data.append({
-                    "title": title,
-                    "description": desc,
-                    "start": start,
-                    "stop": end,
-                    "icon": icon,
-                    "channel": ch_name
-                })
-
-    # If EPG is from BT TV:
-    if channel[0][1] == "bt":
-        times = get_days(channel[0][1])
-        for t in times:
-            url = f'https://voila.metabroadcast.com/4/schedules/{channel[3][1]}.json?key=b4d2edb68da14dfb9e47b5465e99b1b1&from={t.strftime(bt_dt_format)}&to={(datetime.combine(t, time(0, 0)) + timedelta(1)).strftime(bt_dt_format)}&source=api.youview.tv&annotations=content.description'
-            req = requests.get(url)
-            if req.status_code != 200:
-                continue
-            result = json.loads(req.text)
-            epg_data = []
-            for x in result['schedule']['entries']:
-                title = x.get('item').get('display_title').get('title').strip()
-                desc = x.get('item').get('description').strip()
-                start = int(tz.fromutc(datetime.strptime(x.get('broadcast').get('transmission_time'),
-                                                         "%Y-%m-%dT%H:%M:%S.000Z")).timestamp())
-                end = int(tz.fromutc(datetime.strptime(x.get('broadcast').get('transmission_end_time'),
-                                                       "%Y-%m-%dT%H:%M:%S.000Z")).timestamp())
-                icon = x.get('item').get('image')
-                ch_name = channel[2][1]
-
-                programme_data.append({
-                    "title": title,
-                    "description": desc,
-                    "start": start,
-                    "stop": end,
-                    "icon": icon,
-                    "channel": ch_name
-                })
-
-    if channel[0][1] == "freeview":
-        epoch_times = get_days("freeview")
-        for epoch in epoch_times:
-            # Get programme data for Freeview multiplex
-            url = f"https://www.freeview.co.uk/api/tv-guide"
-            req = requests.get(url, params={'nid': f'{channel[4][1]}', 'start': f'{str(epoch)}'})
-            if req.status_code != 200:
-                continue
-            result = json.loads(req.text)
-            epg_data = result['data']['programs']
-
-            ch_match = filter(lambda ch: ch['service_id'] == channel[3][1], epg_data)
-
-            # For each channel in result, get UID from JSON
-            for item in ch_match:
-                service_id = item.get('service_id')
-
-                # Freeview API returns basic info with EPG API call
-                for listing in item.get('events'):
-
+    programme_data = []
+    for channel in channels_data:
+        print(channel[2][1])
+        # If EPG is to be sourced from Sky:
+        if channel[0][1] == "sky":
+            # Get some epoch times - right now, 12am tomorrow and 12am the day after tomorrow (so 48h)
+            epoch_times = get_days(channel[0][1], days_to_grab)
+            for epoch in epoch_times:
+                url = f"https://epgservices.sky.com/5.2.2/api/2.0/channel/json/{channel[3][1]}/{epoch}/86400/4"
+                req = requests.get(url)
+                if req.status_code != 200:
+                    continue
+                result = json.loads(req.text)
+                epg_data = result['listings'][f'{channel[3][1]}']
+                for item in epg_data:
+                    title = item['t']
+                    desc = item['d'] if 'd' in item else None
+                    start = int(item['s'])
+                    end = int(item['s']) + int(item['m'][1])
+                    icon = f"http://epgstatic.sky.com/epgdata/1.0/paimage/46/1/{item['img']}" if 'img' in item else None
                     ch_name = channel[2][1]
-                    title = listing.get("main_title")
-                    desc = listing.get("secondary_title") if "secondary_title" in listing else \
-                        "No further information..."
-                    temp_start = datetime.strptime(listing.get('start_time'), "%Y-%m-%dT%H:%M:%S%z")
-                    duration = parse_duration(listing.get('duration'))
-                    end = (temp_start + duration).timestamp()
-                    start = temp_start.timestamp()
-
-                    # There's another URL for more in-depth programme information
-                    data_url = f"https://www.freeview.co.uk/api/program?sid={service_id}&nid={channel[4][1]}" \
-                               f"&pid={listing.get('program_id')}&start_time={listing.get('start_time')}&duration={listing.get('duration')}"
-                    info_req = requests.get(data_url)
-
-                    try:
-                        res = json.loads(info_req.text)
-                    except Exception as ex:
-                        continue
-
-                    # Should only return one programme, so just get the first if one exists
-                    info = res['data']['programs'][0] if 'programs' in res['data'] else None
-
-                    # Update the description with Freeview Play's medium option if available
-                    desc = info.get('synopsis').get('medium') if 'synopsis' in info else ''
-
-                    # Get Freeview Play's image, or use the fallback
-                    if 'image_url' in info:
-                        icon = info.get('image_url') + '?w=800'
-                    elif 'fallback_image_url' in listing:
-                        icon = listing.get('fallback_image_url') + '?w=800'
-                    else:
-                        icon = None
 
                     programme_data.append({
                         "title":       title,
@@ -271,9 +186,137 @@ for channel in channels_data:
                         "channel":     ch_name
                     })
 
-channel_xml = build_xmltv(channels_data, programme_data)
+        # If EPG is from BT TV:
+        if channel[0][1] == "bt":
+            times = get_days(channel[0][1], days_to_grab)
+            for t in times:
+                url = f'https://voila.metabroadcast.com/4/schedules/{channel[3][1]}.json?key=b4d2edb68da14dfb9e47b5465e99b1b1&from={t.strftime(bt_dt_format)}&to={(datetime.combine(t, time(0, 0)) + timedelta(1)).strftime(bt_dt_format)}&source=api.youview.tv&annotations=content.description'
+                req = requests.get(url)
+                if req.status_code != 200:
+                    continue
+                result = json.loads(req.text)
+                epg_data = []
+                for x in result['schedule']['entries']:
+                    title = x.get('item').get('display_title').get('title').strip()
+                    desc = x.get('item').get('description').strip()
+                    start = int(tz.fromutc(datetime.strptime(x.get('broadcast').get('transmission_time'),
+                                                             "%Y-%m-%dT%H:%M:%S.000Z")).timestamp())
+                    end = int(tz.fromutc(datetime.strptime(x.get('broadcast').get('transmission_end_time'),
+                                                           "%Y-%m-%dT%H:%M:%S.000Z")).timestamp())
+                    icon = x.get('item').get('image')
+                    ch_name = channel[2][1]
 
-# Write some XML
-with open('epg.xml', 'wb') as f:
-    f.write(channel_xml)
-    f.close()
+                    programme_data.append({
+                        "title":       title,
+                        "description": desc,
+                        "start":       start,
+                        "stop":        end,
+                        "icon":        icon,
+                        "channel":     ch_name
+                    })
+
+        if channel[0][1] == "freeview":
+            epoch_times = get_days("freeview", days_to_grab)
+            for epoch in epoch_times:
+                # Get programme data for Freeview multiplex
+                url = f"https://www.freeview.co.uk/api/tv-guide"
+                req = requests.get(url, params={'nid': f'{channel[4][1]}', 'start': f'{str(epoch)}'})
+                if req.status_code != 200:
+                    continue
+                result = json.loads(req.text)
+                epg_data = result['data']['programs']
+
+                ch_match = filter(lambda ch: ch['service_id'] == channel[3][1], epg_data)
+
+                # For each channel in result, get UID from JSON
+                for item in ch_match:
+                    service_id = item.get('service_id')
+
+                    # Freeview API returns basic info with EPG API call
+                    for listing in item.get('events'):
+
+                        ch_name = channel[2][1]
+                        title = listing.get("main_title")
+                        desc = listing.get("secondary_title") if "secondary_title" in listing else \
+                            "No further information..."
+                        temp_start = datetime.strptime(listing.get('start_time'), "%Y-%m-%dT%H:%M:%S%z")
+                        duration = parse_duration(listing.get('duration'))
+                        end = (temp_start + duration).timestamp()
+                        start = temp_start.timestamp()
+
+                        # There's another URL for more in-depth programme information
+                        data_url = f"https://www.freeview.co.uk/api/program?sid={service_id}&nid={channel[4][1]}" \
+                                   f"&pid={listing.get('program_id')}&start_time={listing.get('start_time')}&duration={listing.get('duration')}"
+                        info_req = requests.get(data_url)
+
+                        try:
+                            res = json.loads(info_req.text)
+                        except Exception as ex:
+                            continue
+
+                        # Should only return one programme, so just get the first if one exists
+                        info = res['data']['programs'][0] if 'programs' in res['data'] else None
+
+                        # Update the description with Freeview Play's medium option if available
+                        desc = info.get('synopsis').get('medium') if 'synopsis' in info else ''
+
+                        # Get Freeview Play's image, or use the fallback
+                        if 'image_url' in info:
+                            icon = info.get('image_url') + '?w=800'
+                        elif 'fallback_image_url' in listing:
+                            icon = listing.get('fallback_image_url') + '?w=800'
+                        else:
+                            icon = None
+
+                        programme_data.append({
+                            "title":       title,
+                            "description": desc,
+                            "start":       start,
+                            "stop":        end,
+                            "icon":        icon,
+                            "channel":     ch_name
+                        })
+
+    channel_xml = build_xmltv(channels_data, programme_data)
+
+    if not os.path.isdir(os.path.dirname(path_to_epg)):
+        try:
+            os.mkdir(os.path.dirname(path_to_epg))
+        except Exception as ex:
+            raise ex
+
+    # Write some XML
+    with open(path_to_epg, 'wb') as f:
+        f.write(channel_xml)
+        f.close()
+
+def make_config_file(config_parser):
+    config['CONFIG'] = {'epg_dir': f'{os.getcwd()}',
+                        'epg_filename': 'epg',
+                        'days': '2'}
+    try:
+        with open('config.ini', 'w') as configfile:
+            config.write(configfile)
+    except Exception as ex:
+        raise ex
+
+
+if __name__ == '__main__':
+    config = configparser.ConfigParser()
+
+    if not os.path.isfile(os.getcwd() + 'config.ini'):
+        make_config_file(config)
+
+    config.read('config.ini')
+
+    try:
+        conf_days_to_grab = config['CONFIG']['days']
+        days_to_int = int(conf_days_to_grab)
+    except Exception as ex:
+        print("Encountered issue with supplied days variable!")
+        days_to_int = 2
+
+    epg_path = os.path.join(config['CONFIG']['epg_dir'], config['CONFIG']['epg_filename'] + '.xml')
+
+
+    run(days_to_grab=int(days_to_int), path_to_epg=epg_path)
